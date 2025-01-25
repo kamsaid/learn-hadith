@@ -1,58 +1,65 @@
-import { createServerComponentClient } from "@supabase/auth-helpers-nextjs"
 import { cookies } from "next/headers"
-import { Database } from "@/types/supabase"
+import { createServerComponentClient, createServerActionClient } from "@supabase/auth-helpers-nextjs"
 import { createClient } from "@supabase/supabase-js"
 import { getEmbeddings } from "@/lib/deepseek"
 
 // Create a Supabase client for server components
-export const createServerSupabaseClient = () =>
-  createServerComponentClient<Database>({
-    cookies,
+export function createServerSupabaseClient() {
+  const cookieStore = cookies()
+  return createServerComponentClient({
+    cookies: () => cookieStore
   })
+}
 
-// Create a Supabase admin client for server-side operations
-export const createServerSupabaseAdmin = () =>
-  createClient<Database>(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!,
-    {
-      auth: {
-        persistSession: false,
-      },
+// Create a Supabase admin client
+export function createServerSupabaseAdmin() {
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
+  const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY
+
+  if (!supabaseUrl || !supabaseServiceRoleKey) {
+    throw new Error('Missing Supabase environment variables')
+  }
+
+  return createClient(supabaseUrl, supabaseServiceRoleKey, {
+    auth: {
+      autoRefreshToken: false,
+      persistSession: false
     }
-  )
+  })
+}
 
-// Helper function to initialize Hadith embeddings
-export const initializeHadithEmbeddings = async (hadithId: string, text: string) => {
+// Helper function to initialize embeddings for a hadith
+export async function initializeHadithEmbeddings(hadithId: string, text: string) {
   try {
-    const embedding = await getEmbeddings(text)
+    const embeddings = await getEmbeddings(text)
     const supabase = createServerSupabaseAdmin()
     
     const { error } = await supabase
-      .from("hadiths")
-      .update({ embedding })
-      .eq("id", hadithId)
+      .from('hadiths')
+      .update({ embedding: embeddings })
+      .eq('id', hadithId)
 
     if (error) throw error
+    return true
   } catch (error) {
-    console.error("Error initializing embeddings:", error)
-    throw error
+    console.error('Error initializing embeddings:', error)
+    return false
   }
 }
 
 // Helper function to get user profile with stats
-export const getUserProfile = async (userId: string) => {
+export async function getUserProfile(userId: string) {
   const supabase = createServerSupabaseClient()
+  
   const { data, error } = await supabase
-    .from("profiles")
+    .from('profiles')
     .select(`
-      *,
-      progress: progress(count),
-      favorites: favorites(count),
-      quiz_results: quiz_results(count),
-      achievements: achievements(count)
+      hadiths_read,
+      quizzes_completed,
+      current_streak,
+      points
     `)
-    .eq("id", userId)
+    .eq('id', userId)
     .single()
 
   if (error) throw error

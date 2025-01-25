@@ -1,4 +1,4 @@
-import { NextRequest } from "next/server"
+import { NextRequest, NextResponse } from "next/server"
 import { createServerSupabaseClient } from "@/lib/supabase/server"
 import { getEmbeddings } from "@/lib/supabase/client"
 import {
@@ -10,47 +10,87 @@ import {
 export async function GET(request: NextRequest) {
   try {
     const searchParams = request.nextUrl.searchParams
-    const query = searchParams.get("q")
-    const type = searchParams.get("type") || "text" // "text" or "semantic"
-    const limit = parseInt(searchParams.get("limit") || "10")
-    const page = parseInt(searchParams.get("page") || "1")
+    const query = searchParams.get("query")
+    const type = searchParams.get("type") || "keyword"
+
+    console.log("API: Received search request:", { query, type })
 
     if (!query) {
-      return errorResponse("Search query is required", 400)
+      return NextResponse.json(
+        { error: "Search query is required" },
+        { status: 400 }
+      )
     }
 
     const supabase = createServerSupabaseClient()
+    console.log("API: Created Supabase client")
 
-    if (type === "semantic") {
-      // Semantic search using embeddings
-      const embedding = await getEmbeddings(query)
-      const { data, error } = await supabase.rpc("match_hadiths", {
-        query_embedding: embedding,
-        match_threshold: 0.7,
-        match_count: limit,
-      })
+    let searchResults
 
-      if (error) throw error
-      return successResponse(data)
-    } else {
-      // Text-based search
+    // Perform text-based search
+    if (type === "keyword") {
+      console.log("API: Performing keyword search")
       const { data, error } = await supabase
         .from("hadiths")
-        .select("*")
-        .or(
-          `english_text.ilike.%${query}%,` +
-          `arabic_text.ilike.%${query}%,` +
-          `narrated_by.ilike.%${query}%,` +
-          `topics.cs.{${query}}`
-        )
-        .range((page - 1) * limit, page * limit - 1)
-        .order("book_name", { ascending: true })
+        .select("id, text, book, narrator, chapter")
+        .or(`text.ilike.%${query}%,narrator.ilike.%${query}%,book.ilike.%${query}%`)
+        .limit(10)
 
-      if (error) throw error
-      return successResponse(data)
+      if (error) {
+        console.error("API: Supabase search error:", error)
+        throw error
+      }
+
+      console.log("API: Found results:", data?.length || 0)
+      searchResults = data
+    } else {
+      // Search by specific field (narrator or book)
+      console.log(`API: Performing ${type} search`)
+      const column = type === "narrator" ? "narrator" : "book"
+      const { data, error } = await supabase
+        .from("hadiths")
+        .select("id, text, book, narrator, chapter")
+        .ilike(column, `%${query}%`)
+        .limit(10)
+
+      if (error) {
+        console.error("API: Supabase search error:", error)
+        throw error
+      }
+
+      console.log("API: Found results:", data?.length || 0)
+      searchResults = data
     }
+
+    // If no results found, try a more general search
+    if (!searchResults || searchResults.length === 0) {
+      console.log("API: No results found, trying general search")
+      const { data, error } = await supabase
+        .from("hadiths")
+        .select("id, text, book, narrator, chapter")
+        .or(`text.ilike.%${query}%,narrator.ilike.%${query}%,book.ilike.%${query}%`)
+        .limit(10)
+
+      if (error) {
+        console.error("API: Supabase general search error:", error)
+        throw error
+      }
+
+      searchResults = data
+      console.log("API: Found results in general search:", data?.length || 0)
+    }
+
+    return NextResponse.json(searchResults || [])
   } catch (error) {
-    return handleApiError(error)
+    console.error("API: Search error:", error)
+    return NextResponse.json(
+      { 
+        error: "Failed to perform search", 
+        details: error instanceof Error ? error.message : "Unknown error",
+        stack: error instanceof Error ? error.stack : undefined
+      },
+      { status: 500 }
+    )
   }
 }
 
